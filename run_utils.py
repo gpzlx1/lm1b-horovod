@@ -7,9 +7,15 @@ from tensorflow.python.client import timeline
 
 from language_model import LM
 from common import CheckpointLoader
-
+import horovod.tensorflow as hvd
 
 def run_train(dataset, hps, logdir, ps_device, task=0, master=''):
+    config = tf.ConfigProto()
+    config.gpu_options.visible_device_list = str(hvd.local_rank())
+    config = tf.ConfigProto(allow_soft_placement=True,
+                            intra_op_parallelism_threads=2,
+                            inter_op_parallelism_threads=20)
+    
     with tf.variable_scope('model'):
         model = LM(hps, 'train', ps_device)
 
@@ -23,23 +29,23 @@ def run_train(dataset, hps, logdir, ps_device, task=0, master=''):
     for v in tf.local_variables():
         print('%s %s %s' % (v.name, v.get_shape(), v.device))
 
-    sv = tf.train.Supervisor(
-        is_chief=(task == 0),
-        logdir=logdir,
-        summary_op=None,  # Automatic summaries don't work with placeholders.
-        global_step=model.global_step,
-        save_summaries_secs=30,
-        save_model_secs=120 * 5)
+    
 
-    config = tf.ConfigProto(allow_soft_placement=True,
-                            intra_op_parallelism_threads=2,
-                            inter_op_parallelism_threads=20)
-    with sv.managed_session(master, config=config) as sess:
+    #sv = tf.train.Supervisor(
+    #    is_chief=(task == 0),
+    #    logdir=logdir,
+    #    summary_op=None,  # Automatic summaries don't work with placeholders.
+    #    global_step=model.global_step,
+    #    save_summaries_secs=30,
+    #    save_model_secs=120 * 5)
+    hooks = [hvd.BroadcastGlobalVariablesHook(0)]
+    total_step = 0
+    with tf.train.MonitoredTrainingSession(config=config, hooks=hooks) as sess:
         for v in tf.get_collection('initial_state'):
             sess.run(v.initializer, feed_dict={model.batch_size: hps.batch_size})
         # Slowly increase the number of workers during
         # beginning of the training.
-        while not sv.should_stop():
+        while not sess.should_stop():
             step = int(sess.run(model.global_step))
             waiting_until_step = task * hps.num_delayed_steps
             if step >= waiting_until_step:
@@ -54,7 +60,7 @@ def run_train(dataset, hps, logdir, ps_device, task=0, master=''):
         prev_time = time.time()
         data_iterator = dataset.iterate_forever(
             hps.batch_size * hps.num_gpus, hps.num_steps)
-        while not sv.should_stop():
+        while not sess.should_stop():
             fetches = [model.global_step, model.loss, model.train_op]
             # Chief worker computes summaries every 20 steps.
             should_compute_summary = (
@@ -86,21 +92,21 @@ def run_train(dataset, hps, logdir, ps_device, task=0, master=''):
                     fetches, {model.x: x, model.y: y, model.w: w})
 
             local_step += 1
-            if should_compute_summary:
-                sv.summary_computed(sess, fetched[-1])
-
-            if local_step < 10 or local_step % 20 == 0:
-                cur_time = time.time()
-                num_words = hps.batch_size * hps.num_gpus * hps.num_steps
-                sps = hps.batch_size * hps.num_gpus * (fetched[0] - prev_global_step) / (cur_time - prev_time)
-                wps = ((fetched[0] - prev_global_step) * num_words /
-                       (cur_time - prev_time))
-                prev_global_step = fetched[0]
-                print('Iteration %d, time = %.2fs, wps = %.0f, sps = %.0f '
-                      'train loss = %.4f' % (
-                        fetched[0], cur_time - prev_time, wps, sps, fetched[1]))
-                prev_time = cur_time
-    sv.stop()
+            #if should_compute_summary:
+            #    sess.summary_computed(sess, fetched[-1])
+            if hvd.rank() == 0:
+                if local_step < 10 or local_step % 200 == 0:
+                    cur_time = time.time()
+                    num_words = hps.batch_size * hps.num_gpus * hps.num_steps
+                    sps = hps.batch_size * hps.num_gpus * (fetched[0] - prev_global_step) / (cur_time - prev_time)
+                    wps = ((fetched[0] - prev_global_step) * num_words /
+                           (cur_time - prev_time))
+                    prev_global_step = fetched[0]
+                    print('Iteration %d, time = %.2fs, wps = %.0f, sps = %.0f '
+                          'train loss = %.4f' % (
+                            fetched[0], cur_time - prev_time, wps * hvd.size(), sps * hvd.size(), fetched[1]))
+                    prev_time = cur_time
+    #sv.stop()
 
 
 def run_eval(dataset, hps, logdir, mode, num_eval_steps):

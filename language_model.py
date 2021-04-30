@@ -3,7 +3,7 @@ import tensorflow as tf
 from model_utils import sharded_variable, LSTMCell
 from common import assign_to_gpu, average_grads, find_trainable_variables
 from hparams import HParams
-
+import horovod.tensorflow as hvd
 
 class LM(object):
     def __init__(self, hps, mode='train', ps_device='/gpu:0'):
@@ -43,6 +43,7 @@ class LM(object):
             grads = average_grads(tower_grads)
             optimizer = tf.train.AdagradOptimizer(
                 hps.learning_rate, initial_accumulator_value=1.0)
+            optimizer = hvd.DistributedOptimizer(optimizer)
             self.train_op = optimizer.apply_gradients(
                 grads, global_step=self.global_step)
             self.summary_op = tf.summary.merge_all()

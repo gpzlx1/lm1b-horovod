@@ -1,12 +1,12 @@
 import os.path
 import time
-
+import os
 import tensorflow as tf
 
 from data_utils import Vocabulary, Dataset
 from language_model import LM
 from run_utils import run_train, run_eval
-
+import horovod.tensorflow as hvd
 
 flags = tf.flags
 flags.DEFINE_string('logdir', None, 'Logging directory.')
@@ -23,6 +23,7 @@ FLAGS = flags.FLAGS
 
 
 def main(_):
+    hvd.init()
     hps = LM.get_default_hparams().parse(FLAGS.hpconfig)
     hps.num_gpus = FLAGS.num_gpus
 
@@ -30,12 +31,16 @@ def main(_):
     hps.vocab_size = vocab.num_tokens
 
 
+    config = tf.ConfigProto()
+    config.gpu_options.visible_device_list = str(hvd.local_rank())
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(hvd.local_rank())
+
     if FLAGS.logdir is None:
         FLAGS.logdir = os.path.join('/tmp', 'lm-run-{}'.format(int(time.time())))
         print('logdir: {}'.format(FLAGS.logdir))
     hps.batch_size = 256
     dataset = Dataset(vocab, FLAGS.datadir)
-    run_train(dataset, hps, FLAGS.logdir + '/train', ps_device='/gpu:0')
+    run_train(dataset, hps, FLAGS.logdir + '/train', ps_device='/gpu:' + str(hvd.local_rank()))
  
 
 
