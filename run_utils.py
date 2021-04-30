@@ -92,12 +92,13 @@ def run_train(dataset, hps, logdir, ps_device, task=0, master=''):
             if local_step < 10 or local_step % 20 == 0:
                 cur_time = time.time()
                 num_words = hps.batch_size * hps.num_gpus * hps.num_steps
+                sps = hps.batch_size * hps.num_gpus * (fetched[0] - prev_global_step) / (cur_time - prev_time)
                 wps = ((fetched[0] - prev_global_step) * num_words /
                        (cur_time - prev_time))
                 prev_global_step = fetched[0]
-                print('Iteration %d, time = %.2fs, wps = %.0f, '
+                print('Iteration %d, time = %.2fs, wps = %.0f, sps = %.0f '
                       'train loss = %.4f' % (
-                        fetched[0], cur_time - prev_time, wps, fetched[1]))
+                        fetched[0], cur_time - prev_time, wps, sps, fetched[1]))
                 prev_time = cur_time
     sv.stop()
 
