@@ -16,23 +16,23 @@ class LM(object):
         tf.add_to_collection('input_ys', self.y)
         tf.add_to_collection('batch_size', self.batch_size)
 
-        losses = []
-        tower_grads = []
-        xs = tf.split(self.x, hps.num_gpus, axis=0)
-        ys = tf.split(self.y, hps.num_gpus, axis=0)
-        ws = tf.split(self.w, hps.num_gpus, axis=0)
-        for i in range(hps.num_gpus):
-            with tf.device(assign_to_gpu(i, ps_device)),\
-                 tf.variable_scope(tf.get_variable_scope(),
-                                   reuse=True if i > 0 else None):
-                loss = self._forward(i, xs[i], ys[i], ws[i])
-                losses += [loss]
-                if mode == 'train':
-                    cur_grads = self._backward(
-                        loss, summaries=(i == hps.num_gpus - 1))
-                    tower_grads += [cur_grads]
+        #losses = []
+        #tower_grads = []
+        #xs = tf.split(self.x, hps.num_gpus, axis=0)
+        #ys = tf.split(self.y, hps.num_gpus, axis=0)
+        #ws = tf.split(self.w, hps.num_gpus, axis=0)
+  
+        with tf.device(ps_device),\
+             tf.variable_scope(tf.get_variable_scope(),
+                               reuse=None):
+            loss = self._forward(hvd.local_rank(), self.x, self.y, self.w)
+            #losses += [loss]
+            #if mode == 'train':
+            #    cur_grads = self._backward(
+            #        loss, summaries=False)
+            #    tower_grads += [cur_grads]
 
-        self.loss = tf.add_n(losses) / len(losses)
+        self.loss = loss
         tf.summary.scalar('model/loss', self.loss)
 
         self.global_step = tf.get_variable(
@@ -40,12 +40,12 @@ class LM(object):
             initializer=tf.zeros_initializer, trainable=False)
 
         if mode == 'train':
-            grads = average_grads(tower_grads)
+            #grads = average_grads(tower_grads)
             optimizer = tf.train.AdagradOptimizer(
                 hps.learning_rate, initial_accumulator_value=1.0)
             optimizer = hvd.DistributedOptimizer(optimizer)
-            self.train_op = optimizer.apply_gradients(
-                grads, global_step=self.global_step)
+            self.train_op = optimizer.minimize(
+                self.loss, global_step=self.global_step)
             self.summary_op = tf.summary.merge_all()
         else:
             self.train_op = tf.no_op()

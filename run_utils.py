@@ -63,14 +63,13 @@ def run_train(dataset, hps, logdir, ps_device, task=0, master=''):
         while not sess.should_stop():
             fetches = [model.global_step, model.loss, model.train_op]
             # Chief worker computes summaries every 20 steps.
-            should_compute_summary = (
-                task == 0 and local_step > 0 and local_step % 20 == 0)
+            should_compute_summary = (hvd.rank() == 0 and local_step > 0 and local_step % 20 == 0)
             if should_compute_summary:
                 fetches += [model.summary_op]
 
             x, y, w = next(data_iterator)
             should_run_profiler = (
-                hps.run_profiler and task == 0 and local_step % 1000 == 13)
+                hps.run_profiler and hvd.rank() == 0 and local_step % 1000 == 13)
             if should_run_profiler:
                 run_options = tf.RunOptions(
                     trace_level=tf.RunOptions.FULL_TRACE)
