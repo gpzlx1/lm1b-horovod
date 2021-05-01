@@ -17,29 +17,29 @@ class LM(object):
         tf.add_to_collection('batch_size', self.batch_size)
 
 
+        optimizer = tf.train.AdagradOptimizer(hps.learning_rate, initial_accumulator_value=1.0)
+        optimizer = hvd.DistributedOptimizer(optimizer)
+
         with tf.device(ps_device),\
              tf.variable_scope(tf.get_variable_scope(),
                                reuse=None):
             loss = self._forward(hvd.local_rank(), self.x, self.y, self.w)
-            losses = [loss]
+            losses = loss
             
-            cur_grads = self._backward(loss, summaries=True)
-            tower_grads = [cur_grads]
+            cur_grads = self._backward(loss, optimizer, summaries=True)
+            tower_grads = cur_grads
 
-        self.loss = tf.add_n(losses) / len(losses)
+        self.loss = losses
         tf.summary.scalar('model/loss', self.loss)
 
         self.global_step = tf.get_variable(
             'global_step', [], tf.int32,
             initializer=tf.zeros_initializer, trainable=False)
 
+        grads = tower_grads
         
-        grads = average_grads(tower_grads)
-        optimizer = tf.train.AdagradOptimizer(
-            hps.learning_rate, initial_accumulator_value=1.0)
-        optimizer = hvd.DistributedOptimizer(optimizer)
         self.train_op = optimizer.apply_gradients(
-            grads, global_step=self.global_step, name="train")
+            grads, global_step=self.global_step)
         self.summary_op = tf.summary.merge_all()
         
 
@@ -127,7 +127,7 @@ class LM(object):
         loss = tf.reduce_mean(loss * tf.reshape(w, [-1]))
         return loss
 
-    def _backward(self, loss, summaries=False):
+    def _backward(self, loss, opt, summaries=False):
         hps = self.hps
 
         loss = loss * hps.num_steps
@@ -137,15 +137,18 @@ class LM(object):
         softmax_vars = find_trainable_variables('softmax')
 
         all_vars = emb_vars + lstm_vars + softmax_vars
-        grads = tf.gradients(loss, all_vars)
+        grads_and_var = opt.compute_gradients(loss, all_vars)
+        grads = [grad for grad, _ in grads_and_var]
+        #grads = tf.gradients(loss, all_vars)
         orig_grads = grads[:]
         emb_grads = grads[:len(emb_vars)]
         grads = grads[len(emb_vars):]
         for i in range(len(emb_grads)):
+            #assert False
             assert isinstance(emb_grads[i], tf.IndexedSlices)
             emb_grads[i] = tf.IndexedSlices(
-                emb_grads[i].values * hps.batch_size, emb_grads[i].indices,
-                emb_grads[i].dense_shape)
+                    emb_grads[i].values * hps.batch_size, emb_grads[i].indices,
+                    emb_grads[i].dense_shape)
 
         lstm_grads = grads[:len(lstm_vars)]
         softmax_grads = grads[len(lstm_vars):]

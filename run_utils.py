@@ -61,8 +61,6 @@ def run_train(dataset, hps, logdir, ps_device, task=0, master=''):
         data_iterator = dataset.iterate_forever(
             hps.batch_size * hps.num_gpus, hps.num_steps)
         while not sess.should_stop():
-            if hvd.local_rank() == 1:
-                time.sleep(1)
             fetches = [model.global_step, model.loss, model.train_op]
             # Chief worker computes summaries every 20 steps.
             should_compute_summary = (
