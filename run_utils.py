@@ -61,35 +61,17 @@ def run_train(dataset, hps, logdir, ps_device, task=0, master=''):
         data_iterator = dataset.iterate_forever(
             hps.batch_size * hps.num_gpus, hps.num_steps)
         while not sess.should_stop():
+            if hvd.local_rank() == 1:
+                time.sleep(1)
             fetches = [model.global_step, model.loss, model.train_op]
             # Chief worker computes summaries every 20 steps.
             should_compute_summary = (
-                task == 0 and local_step > 0 and local_step % 20 == 0)
+                hvd.rank() == 0 and local_step > 0 and local_step % 20 == 0)
             if should_compute_summary:
                 fetches += [model.summary_op]
 
             x, y, w = next(data_iterator)
-            should_run_profiler = (
-                hps.run_profiler and task == 0 and local_step % 1000 == 13)
-            if should_run_profiler:
-                run_options = tf.RunOptions(
-                    trace_level=tf.RunOptions.FULL_TRACE)
-                run_metadata = tf.RunMetadata()
-                feed_dict = {model.x: x, model.y: y, model.w: w,
-                             model.batch_size: hps.batch_size}
-                fetched = sess.run(
-                    fetches, feed_dict,
-                    options=run_options, run_metadata=run_metadata)
-                # Create the Timeline object, and write it to a json
-                tl = timeline.Timeline(run_metadata.step_stats)
-                ctf = tl.generate_chrome_trace_format()
-                print('Running profiler')
-                with open(logdir + '/timeline.json', 'w') as f:
-                    f.write(ctf)
-                print('Finished profiling!')
-            else:
-                fetched = sess.run(
-                    fetches, {model.x: x, model.y: y, model.w: w})
+            fetched = sess.run(fetches, {model.x: x, model.y: y, model.w: w})
 
             local_step += 1
             #if should_compute_summary:
